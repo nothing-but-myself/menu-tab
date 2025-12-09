@@ -1,0 +1,12 @@
+# Build artifacts
+.build/
+*.xcodeproj
+xcuserdata/
+DerivedData/
+
+# macOS
+.DS_Store
+*.swp
+
+# Config (user-specific)
+# .config/
