@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "StatusBarRotater",
+    name: "MenuBarRotator",
     platforms: [
         .macOS(.v12)
     ],
     targets: [
         .executableTarget(
-            name: "StatusBarRotater",
-            path: "StatusBarRotater"
+            name: "MenuBarRotator",
+            path: "MenuBarRotator"
         )
     ]
 )

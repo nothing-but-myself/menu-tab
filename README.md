@@ -1,6 +1,6 @@
-# Status Bar Rotater
+# Menu Bar Rotator
 
-通过快捷键轮换 macOS 状态栏图标，解决 MacBook 刘海遮挡问题。
+通过快捷键轮换 macOS 菜单栏图标，解决 MacBook 刘海遮挡问题。
 
 ## 核心创意
 
@@ -24,7 +24,7 @@
 swift build
 
 # 运行
-.build/debug/StatusBarRotater
+.build/debug/MenuBarRotator
 ```
 
 首次运行需要授予辅助功能权限：
@@ -84,7 +84,7 @@ func simulateDrag(from: CGPoint, to: CGPoint) {
 
 ## 配置文件
 
-位置：`~/.config/status-bar-rotater/config.json`
+位置：`~/.config/menu-bar-rotator/config.json`
 
 ```json
 {
@@ -128,13 +128,11 @@ func simulateDrag(from: CGPoint, to: CGPoint) {
 ## 项目结构
 
 ```
-status-bar-rotater/
+menu-bar-rotator/
 ├── Package.swift
-├── StatusBarRotater/
+├── MenuBarRotator/
 │   └── main.swift           # 主程序
-├── test_list.swift          # 测试：列出状态栏项目
-├── test_all_layers.swift    # 测试：列出所有窗口层级
-└── test_accessibility.swift # 测试：Accessibility API
+└── README.md
 ```
 
 ## 已知问题

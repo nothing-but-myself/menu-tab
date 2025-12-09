@@ -56,7 +56,7 @@ struct Config: Codable {
 
     static let configURL: URL = {
         let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/status-bar-rotater")
+            .appendingPathComponent(".config/menu-bar-rotator")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("config.json")
     }()
@@ -100,7 +100,7 @@ class StatusBarManager {
     var config = Config.load()
 
     // 自己的 bundle id，永远不参与轮换
-    private let selfBundleId = Bundle.main.bundleIdentifier ?? "StatusBarRotater"
+    private let selfBundleId = Bundle.main.bundleIdentifier ?? "MenuBarRotator"
 
     /// 获取所有第三方状态栏图标（按 X 坐标排序）
     func getIcons(excludePinned: Bool = true, excludeSelf: Bool = true) -> [StatusBarIcon] {
@@ -114,7 +114,7 @@ class StatusBarManager {
             if bundleId.hasPrefix("com.apple.") { continue }
 
             // 跳过自己
-            if excludeSelf && (bundleId == selfBundleId || app.localizedName == "StatusBarRotater") { continue }
+            if excludeSelf && (bundleId == selfBundleId || app.localizedName == "MenuBarRotator") { continue }
 
             // 跳过固定的应用
             if excludePinned && config.pinnedApps.contains(bundleId) { continue }
@@ -150,7 +150,7 @@ class StatusBarManager {
         for app in runningApps {
             guard let bundleId = app.bundleIdentifier else { continue }
 
-            if bundleId == selfBundleId || app.localizedName == "StatusBarRotater" {
+            if bundleId == selfBundleId || app.localizedName == "MenuBarRotator" {
                 let appElement = AXUIElementCreateApplication(app.processIdentifier)
                 var extras: CFTypeRef?
 
@@ -160,7 +160,7 @@ class StatusBarManager {
                    let size = getSize(extrasElement),
                    size.width > 0 && pos.y < 50 {
                     return StatusBarIcon(
-                        name: "StatusBarRotater",
+                        name: "MenuBarRotator",
                         bundleId: bundleId,
                         element: extrasElement,
                         x: pos.x,
