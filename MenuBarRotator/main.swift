@@ -292,6 +292,150 @@ class StatusBarManager {
         CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: originalCGPoint, mouseButton: .left)?.post(tap: .cghidEventTap)
     }
 
+    // MARK: - Switcher Actions
+
+    /// 通过发送 Escape 键关闭任何已打开的菜单
+    private func dismissOpenMenu() {
+        let src = CGEventSource(stateID: .combinedSessionState)
+
+        // 发送 Escape 键按下
+        let escDown = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true)
+        escDown?.post(tap: .cghidEventTap)
+
+        // 发送 Escape 键松开
+        let escUp = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)
+        escUp?.post(tap: .cghidEventTap)
+
+        usleep(50000)  // 等待菜单关闭
+    }
+
+    /// 触发菜单栏显示（用于全屏模式）
+    private func revealMenuBar() {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let screenWidth = NSScreen.main?.frame.width ?? 1470
+
+        // 将鼠标移到屏幕右上角（避开刘海区域），触发菜单栏显示
+        let topRight = CGPoint(x: screenWidth - 100, y: 0)
+        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: topRight, mouseButton: .left)?.post(tap: .cghidEventTap)
+
+        // 等待菜单栏动画完成（全屏模式需要更长时间）
+        usleep(500000)  // 500ms
+    }
+
+    /// 判断图标是否在刘海区域（考虑图标宽度）
+    func isIconHidden(_ icon: StatusBarIcon) -> Bool {
+        let screenWidth = NSScreen.main?.frame.width ?? 1470
+        let notchStart = (screenWidth / 2) - 120
+        let notchEnd = (screenWidth / 2) + 120
+
+        // 图标的右边缘在刘海开始之前 = 可见（左侧）
+        // 图标的左边缘在刘海结束之后 = 可见（右侧）
+        // 否则 = 被遮挡
+        let iconLeft = icon.x
+        let iconRight = icon.x + icon.width
+
+        return !(iconRight < notchStart || iconLeft > notchEnd)
+    }
+
+    /// 激活图标菜单（多策略尝试）
+    func activateIcon(icon: StatusBarIcon) {
+        // 先关闭任何已打开的菜单
+        dismissOpenMenu()
+
+        // 显示菜单栏（全屏模式）
+        revealMenuBar()
+
+        // 重新获取图标最新位置
+        var icons = getIcons(excludePinned: false, excludeSelf: true)
+        guard var currentIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
+            // 图标可能已消失，尝试用旧的 element 直接触发
+            AXUIElementPerformAction(icon.element, kAXPressAction as CFString)
+            return
+        }
+
+        // 检查图标是否在刘海区域
+        if isIconHidden(currentIcon) {
+            // 策略: 通过轮换把隐藏图标移到可见区域
+            // 计算需要轮换多少次
+            let screenWidth = NSScreen.main?.frame.width ?? 1470
+            let notchEnd = (screenWidth / 2) + 120
+
+            // 找到目标图标在列表中的位置
+            guard let targetIndex = icons.firstIndex(where: { $0.bundleId == icon.bundleId }) else {
+                return
+            }
+
+            // 找到第一个可见图标的位置
+            guard let firstVisibleIndex = icons.firstIndex(where: { !isIconHidden($0) && $0.x > notchEnd }) else {
+                // 没有可见图标，直接尝试点击
+                clickIconDirectly(currentIcon)
+                return
+            }
+
+            // 如果目标在可见区域左边，需要向右轮换（把左边的移到右边）
+            if targetIndex < firstVisibleIndex {
+                let rotationsNeeded = firstVisibleIndex - targetIndex
+                for _ in 0..<rotationsNeeded {
+                    rotateLeft()  // 把最左边的图标移到最右边
+                    usleep(300000)  // 等待轮换完成
+                }
+            }
+
+            // 轮换后重新获取位置
+            usleep(200000)
+            icons = getIcons(excludePinned: false, excludeSelf: true)
+            guard let updatedIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
+                return
+            }
+            currentIcon = updatedIcon
+        }
+
+        // 现在图标应该在可见区域了，尝试激活
+        // 方法1: AX Press
+        let result = AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString)
+        if result == .success {
+            return
+        }
+
+        // 方法2: 模拟点击
+        clickIconDirectly(currentIcon)
+    }
+
+    /// 直接点击图标（不移动）
+    private func clickIconDirectly(_ icon: StatusBarIcon) {
+        let originalPosition = NSEvent.mouseLocation
+        let screenHeight = NSScreen.main?.frame.height ?? 0
+        let originalCGPoint = CGPoint(x: originalPosition.x, y: screenHeight - originalPosition.y)
+        clickIcon(icon, restoreTo: originalCGPoint)
+    }
+
+    /// 旧方法名保留兼容
+    func moveToVisibleAndClick(icon: StatusBarIcon) {
+        activateIcon(icon: icon)
+    }
+
+    /// 模拟点击图标，完成后恢复鼠标位置
+    private func clickIcon(_ icon: StatusBarIcon, restoreTo originalPosition: CGPoint) {
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let clickPoint = CGPoint(x: icon.centerX, y: icon.centerY)
+
+        // 移动到图标位置
+        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: clickPoint, mouseButton: .left)?.post(tap: .cghidEventTap)
+        usleep(50000)
+
+        // 点击
+        let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: clickPoint, mouseButton: .left)
+        mouseDown?.post(tap: .cghidEventTap)
+        usleep(30000)
+
+        let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: clickPoint, mouseButton: .left)
+        mouseUp?.post(tap: .cghidEventTap)
+
+        // 恢复鼠标位置
+        usleep(50000)
+        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: originalPosition, mouseButton: .left)?.post(tap: .cghidEventTap)
+    }
+
     // MARK: - 固定图标管理
 
     func togglePin(bundleId: String) {
@@ -328,6 +472,271 @@ class StatusBarManager {
     }
 }
 
+// MARK: - Switcher Panel (Cmd+Tab style UI)
+class SwitcherPanel: NSPanel {
+    private var iconViews: [NSImageView] = []
+    private var hiddenIndicators: [NSView] = []  // 刘海遮挡标记
+    private var nameLabel: NSTextField!
+    private var selectionBox: NSBox!
+    private var containerView: NSView!
+    private var visualEffectView: NSVisualEffectView!
+
+    var icons: [StatusBarIcon] = []
+    var selectedIndex: Int = 0 {
+        didSet {
+            updateSelection(animated: true)
+        }
+    }
+
+    override init(contentRect: NSRect, styleMask style: NSWindow.StyleMask, backing backingStoreType: NSWindow.BackingStoreType, defer flag: Bool) {
+        super.init(contentRect: contentRect, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+
+        self.level = .floating
+        self.isOpaque = false
+        self.backgroundColor = .clear
+        self.hasShadow = true
+        self.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        self.alphaValue = 0  // 初始透明，用于动画
+
+        setupUI()
+    }
+
+    private func setupUI() {
+        visualEffectView = NSVisualEffectView(frame: .zero)
+        visualEffectView.material = .hudWindow
+        visualEffectView.state = .active
+        visualEffectView.wantsLayer = true
+        visualEffectView.layer?.cornerRadius = 12
+        visualEffectView.layer?.masksToBounds = true
+
+        contentView = visualEffectView
+
+        containerView = NSView(frame: .zero)
+        visualEffectView.addSubview(containerView)
+
+        selectionBox = NSBox(frame: .zero)
+        selectionBox.boxType = .custom
+        selectionBox.borderColor = NSColor.controlAccentColor
+        selectionBox.borderWidth = 3
+        selectionBox.cornerRadius = 8
+        selectionBox.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.2)
+        containerView.addSubview(selectionBox)
+
+        nameLabel = NSTextField(labelWithString: "")
+        nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        nameLabel.textColor = .labelColor
+        nameLabel.alignment = .center
+        visualEffectView.addSubview(nameLabel)
+    }
+
+    func configure(with icons: [StatusBarIcon], lastSelectedBundleId: String? = nil) {
+        self.icons = icons
+
+        // Clear old views
+        iconViews.forEach { $0.removeFromSuperview() }
+        iconViews.removeAll()
+        hiddenIndicators.forEach { $0.removeFromSuperview() }
+        hiddenIndicators.removeAll()
+
+        let iconSize: CGFloat = 48
+        let padding: CGFloat = 16
+        let spacing: CGFloat = 12
+
+        let totalWidth = CGFloat(icons.count) * iconSize + CGFloat(icons.count - 1) * spacing + padding * 2
+        let panelWidth = max(totalWidth, 200)
+        let panelHeight: CGFloat = 100
+
+        // Position panel at screen center
+        if let screen = NSScreen.main {
+            let x = (screen.frame.width - panelWidth) / 2
+            let y = (screen.frame.height - panelHeight) / 2 + 100
+            setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
+        }
+
+        contentView?.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
+        containerView.frame = NSRect(x: padding, y: 30, width: panelWidth - padding * 2, height: iconSize)
+
+        // Create icon views
+        for (index, icon) in icons.enumerated() {
+            let xPos = CGFloat(index) * (iconSize + spacing)
+
+            let iconContainer = NSView(frame: NSRect(x: xPos, y: 0, width: iconSize, height: iconSize))
+            iconContainer.wantsLayer = true
+
+            let imageView = NSImageView(frame: NSRect(x: 0, y: 0, width: iconSize, height: iconSize))
+
+            // Get app icon
+            if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == icon.bundleId }) {
+                imageView.image = app.icon
+            } else {
+                imageView.image = NSImage(systemSymbolName: "app.fill", accessibilityDescription: nil)
+            }
+            imageView.imageScaling = .scaleProportionallyUpOrDown
+
+            iconContainer.addSubview(imageView)
+
+            // 添加刘海遮挡标记（半透明遮罩 + 图标）- 使用统一的判断方法
+            let isHidden = StatusBarManager.shared.isIconHidden(icon)
+            if isHidden {
+                let overlay = NSView(frame: NSRect(x: 0, y: 0, width: iconSize, height: iconSize))
+                overlay.wantsLayer = true
+                overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.4).cgColor
+                overlay.layer?.cornerRadius = 6
+                iconContainer.addSubview(overlay)
+                hiddenIndicators.append(overlay)
+
+                // 小眼睛图标表示隐藏
+                let eyeIcon = NSImageView(frame: NSRect(x: iconSize - 16, y: 2, width: 14, height: 14))
+                eyeIcon.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: "Hidden")
+                eyeIcon.contentTintColor = .white
+                iconContainer.addSubview(eyeIcon)
+            }
+
+            containerView.addSubview(iconContainer)
+            iconViews.append(imageView)
+        }
+
+        // Name label at bottom
+        nameLabel.frame = NSRect(x: 0, y: 8, width: panelWidth, height: 18)
+
+        // 恢复上次选中的图标
+        if let lastBundleId = lastSelectedBundleId,
+           let lastIndex = icons.firstIndex(where: { $0.bundleId == lastBundleId }) {
+            self.selectedIndex = lastIndex
+        } else {
+            self.selectedIndex = 0
+        }
+
+        updateSelection(animated: false)
+    }
+
+    private func updateSelection(animated: Bool) {
+        guard selectedIndex >= 0 && selectedIndex < iconViews.count else { return }
+
+        let iconSize: CGFloat = 48
+        let spacing: CGFloat = 12
+        let boxPadding: CGFloat = 4
+
+        let targetX = CGFloat(selectedIndex) * (iconSize + spacing) - boxPadding
+        let targetFrame = NSRect(
+            x: targetX,
+            y: -boxPadding,
+            width: iconSize + boxPadding * 2,
+            height: iconSize + boxPadding * 2
+        )
+
+        if animated {
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.15
+                context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
+                selectionBox.animator().frame = targetFrame
+            }
+        } else {
+            selectionBox.frame = targetFrame
+        }
+
+        // 更新名称，显示是否被遮挡（使用统一的判断方法）
+        let icon = icons[selectedIndex]
+        let isHidden = StatusBarManager.shared.isIconHidden(icon)
+
+        nameLabel.stringValue = isHidden ? "\(icon.name) (隐藏)" : icon.name
+    }
+
+    func selectNext() {
+        selectedIndex = (selectedIndex + 1) % icons.count
+    }
+
+    func selectPrev() {
+        selectedIndex = (selectedIndex - 1 + icons.count) % icons.count
+    }
+
+    // 显示动画
+    func showAnimated() {
+        self.alphaValue = 0
+        self.orderFront(nil)
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.15
+            context.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            self.animator().alphaValue = 1
+        }
+    }
+
+    // 隐藏动画
+    func hideAnimated(completion: (() -> Void)? = nil) {
+        NSAnimationContext.runAnimationGroup({ context in
+            context.duration = 0.1
+            context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+            self.animator().alphaValue = 0
+        }, completionHandler: {
+            self.orderOut(nil)
+            completion?()
+        })
+    }
+}
+
+// MARK: - Switcher Controller
+class SwitcherController {
+    static let shared = SwitcherController()
+
+    private var panel: SwitcherPanel?
+    private var icons: [StatusBarIcon] = []
+    private var lastSelectedBundleId: String?  // 记住上次选中
+    var isActive: Bool { panel?.isVisible ?? false }
+
+    func show() {
+        icons = StatusBarManager.shared.getIcons(excludePinned: false, excludeSelf: true)
+        guard !icons.isEmpty else {
+            print("⚠️  没有可切换的图标")
+            return
+        }
+
+        if panel == nil {
+            panel = SwitcherPanel(contentRect: .zero, styleMask: [], backing: .buffered, defer: false)
+        }
+
+        panel?.configure(with: icons, lastSelectedBundleId: lastSelectedBundleId)
+        panel?.showAnimated()
+    }
+
+    func selectNext() {
+        panel?.selectNext()
+    }
+
+    func selectPrev() {
+        panel?.selectPrev()
+    }
+
+    func confirm() {
+        confirmSelection()
+    }
+
+    private func confirmSelection() {
+        guard let panel = panel, panel.isVisible else { return }
+
+        let selectedIndex = panel.selectedIndex
+        guard selectedIndex >= 0 && selectedIndex < icons.count else {
+            cancel()
+            return
+        }
+
+        let selectedIcon = icons[selectedIndex]
+
+        // 记住这次选中的图标
+        lastSelectedBundleId = selectedIcon.bundleId
+
+        panel.hideAnimated {
+            // Move icon to visible area and click it
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                StatusBarManager.shared.moveToVisibleAndClick(icon: selectedIcon)
+            }
+        }
+    }
+
+    func cancel() {
+        panel?.hideAnimated()
+    }
+}
+
 // MARK: - Global Hotkey Manager
 class HotkeyManager {
     static let shared = HotkeyManager()
@@ -335,7 +744,8 @@ class HotkeyManager {
     private var eventTap: CFMachPort?
 
     func start() {
-        let eventMask = (1 << CGEventType.keyDown.rawValue)
+        // Listen for keyDown and flagsChanged
+        let eventMask = (1 << CGEventType.keyDown.rawValue) | (1 << CGEventType.flagsChanged.rawValue)
 
         eventTap = CGEvent.tapCreate(
             tap: .cgSessionEventTap,
@@ -343,8 +753,53 @@ class HotkeyManager {
             options: .defaultTap,
             eventsOfInterest: CGEventMask(eventMask),
             callback: { (proxy, type, event, refcon) -> Unmanaged<CGEvent>? in
+                // 检测 tap 被禁用，重新启用
+                if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                    if let tap = HotkeyManager.shared.eventTap {
+                        CGEvent.tapEnable(tap: tap, enable: true)
+                        print("🔄 Event tap 已重新启用")
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
+
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let flags = event.flags
+                let eventType = CGEventType(rawValue: UInt32(type.rawValue))
+
+                // Handle Ctrl release when switcher is active
+                if eventType == .flagsChanged {
+                    if SwitcherController.shared.isActive && !flags.contains(.maskControl) {
+                        DispatchQueue.main.async {
+                            SwitcherController.shared.confirm()
+                        }
+                        return Unmanaged.passUnretained(event)
+                    }
+                    return Unmanaged.passUnretained(event)
+                }
+
+                // Ctrl + ` (keyCode 50) : Show switcher / select next
+                if keyCode == 50 && flags.contains(.maskControl) && !flags.contains(.maskCommand) {
+                    DispatchQueue.main.async {
+                        if SwitcherController.shared.isActive {
+                            if flags.contains(.maskShift) {
+                                SwitcherController.shared.selectPrev()
+                            } else {
+                                SwitcherController.shared.selectNext()
+                            }
+                        } else {
+                            SwitcherController.shared.show()
+                        }
+                    }
+                    return nil
+                }
+
+                // Esc : Cancel switcher
+                if keyCode == 53 && SwitcherController.shared.isActive {
+                    DispatchQueue.main.async {
+                        SwitcherController.shared.cancel()
+                    }
+                    return nil
+                }
 
                 // Cmd + Shift + ← : 图标向左流动（右边移到左边）
                 if keyCode == 123 && flags.contains(.maskCommand) && flags.contains(.maskShift) && !flags.contains(.maskAlternate) {
@@ -402,7 +857,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         setupStatusItem()
         HotkeyManager.shared.start()
 
-        print("🚀 Status Bar Rotater 已启动")
+        print("🚀 Menu Bar Rotator 已启动")
+        print("   ⌃ `     图标切换器")
         print("   ⌘ ⇧ ←  向左流动")
         print("   ⌘ ⇧ →  向右流动")
     }
