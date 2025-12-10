@@ -4,6 +4,34 @@ The App Switcher for your Menu Bar.
 
 A ⌘Tab-style switcher for macOS menu bar icons. Quickly access icons hidden by the MacBook notch.
 
+## Download
+
+**[⬇ Download MenuTab-v0.0.1.dmg](https://github.com/nothing-but-myself/menu-tab/releases/download/v0.0.1/MenuTab-v0.0.1.dmg)**
+
+Or see all releases: [Releases](https://github.com/nothing-but-myself/menu-tab/releases)
+
+## Install
+
+1. Open the downloaded `.dmg` file
+2. Drag **MenuTab** to **Applications**
+3. Open MenuTab from Applications
+4. Grant **Accessibility** permission when prompted:
+   - Click "Open System Settings"
+   - Enable MenuTab in Privacy & Security → Accessibility
+
+## Usage
+
+| Shortcut | Action |
+|----------|--------|
+| `⌃ \`` | Open switcher / Next icon |
+| `⌃ ⇧ \`` | Previous icon |
+| Release `⌃` | Confirm selection |
+| `Esc` | Cancel |
+
+**Menu bar options** (click the MenuTab icon):
+- **Hidden Icons Only** — Only show icons hidden by the notch
+- **Ignore List** — Exclude specific apps from the switcher
+
 ## Features
 
 - **⌘Tab-style UI** — Familiar interface for switching menu bar icons
@@ -11,47 +39,18 @@ A ⌘Tab-style switcher for macOS menu bar icons. Quickly access icons hidden by
 - **Multi-display** — Works correctly across multiple screens
 - **Customizable** — Ignore list and hidden-only mode
 
-## Install
-
-Download `MenuTab-v0.0.1.dmg` from [Releases](../../releases), open it, drag to Applications.
-
-Or build from source:
+## Build from Source
 
 ```bash
 git clone https://github.com/nothing-but-myself/menu-tab.git
 cd menu-tab
 swift build -c release
-```
-
-**First run:** Grant Accessibility permission in System Settings → Privacy & Security → Accessibility.
-
-## Usage
-
-| Shortcut | Action |
-|----------|--------|
-| `⌃ \`` | Open switcher / Next |
-| `⌃ ⇧ \`` | Previous |
-| Release `⌃` | Confirm |
-| `Esc` | Cancel |
-
-Click the menu bar icon for options:
-- **Hidden Icons Only** — Show only notch-hidden icons
-- **Ignore List** — Exclude specific apps
-
-## Config
-
-`~/.config/menutab/config.json`
-
-```json
-{
-  "onlyShowHidden": false,
-  "ignoredApps": []
-}
+open .build/release/MenuTab
 ```
 
 ## Requirements
 
-- macOS 12.0+
+- macOS 12.0 (Monterey) or later
 - Accessibility permission
 
 ## License
