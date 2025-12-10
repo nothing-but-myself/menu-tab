@@ -102,13 +102,17 @@ class StatusBarManager {
     // 自己的 bundle id，永远不参与轮换
     private let selfBundleId = Bundle.main.bundleIdentifier ?? "MenuBarRotator"
 
-    /// 获取所有第三方状态栏图标（按 X 坐标排序）
+    /// 获取所有第三方状态栏图标（按 X 坐标排序，按 bundleId 去重）
     func getIcons(excludePinned: Bool = true, excludeSelf: Bool = true) -> [StatusBarIcon] {
         var icons: [StatusBarIcon] = []
+        var seenBundleIds = Set<String>()  // 用于去重
 
         let runningApps = NSWorkspace.shared.runningApplications
         for app in runningApps {
             guard let bundleId = app.bundleIdentifier else { continue }
+
+            // 跳过已经处理过的 bundleId（去重）
+            if seenBundleIds.contains(bundleId) { continue }
 
             // 跳过系统应用
             if bundleId.hasPrefix("com.apple.") { continue }
@@ -137,6 +141,7 @@ class StatusBarManager {
                     y: pos.y,
                     width: size.width
                 ))
+                seenBundleIds.insert(bundleId)  // 标记为已处理
             }
         }
 
@@ -294,6 +299,19 @@ class StatusBarManager {
 
     // MARK: - Switcher Actions
 
+    /// 关闭已打开的菜单（混合策略）
+    func dismissCurrentMenu() {
+        // 1. 激活自己的应用，macOS 会自动关闭大多数 App 的 Menu/Popover
+        NSRunningApplication.current.activate()
+
+        // 2. 发送 ESC 作为补充（处理 Lark 等顽固应用）
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let escDown = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true)
+        escDown?.post(tap: .cghidEventTap)
+        let escUp = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)
+        escUp?.post(tap: .cghidEventTap)
+    }
+
     /// 通过发送 Escape 键关闭任何已打开的菜单
     private func dismissOpenMenu() {
         let src = CGEventSource(stateID: .combinedSessionState)
@@ -337,11 +355,8 @@ class StatusBarManager {
         return !(iconRight < notchStart || iconLeft > notchEnd)
     }
 
-    /// 激活图标菜单
+    /// 激活图标菜单（统一使用 Accessibility API）
     func activateIcon(icon: StatusBarIcon) {
-        // 先关闭任何已打开的菜单
-        dismissOpenMenu()
-
         // 重新获取图标最新位置
         let icons = getIcons(excludePinned: false, excludeSelf: true)
         guard let currentIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
@@ -349,42 +364,28 @@ class StatusBarManager {
             return
         }
 
-        // 如果图标可见，直接点击
-        if !isIconHidden(currentIcon) {
-            revealMenuBar()  // 全屏模式下先显示菜单栏
-            clickIconDirectly(currentIcon)
+        // 优先使用递归查找子按钮（最有效的方案）
+        if let button = findClickableChild(currentIcon.element) {
+            AXUIElementPerformAction(button, kAXPressAction as CFString)
             return
         }
 
-        // 图标在刘海后面，尝试多种激活方式
-
-        // 方案一：聚焦 + AXPress
-        let focusResult = AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef)
-        if focusResult == .success {
-            usleep(100000)
-            if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
-                return
-            }
+        // 备选：聚焦后 AXPress
+        if AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success {
+            usleep(10000)  // 10ms
+            AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString)
+            return
         }
 
-        // 方案二：递归查找子按钮
-        if let button = findClickableChild(currentIcon.element) {
-            if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
-                return
-            }
-        }
-
-        // 方案三：AXShowMenu
+        // 备选：AXShowMenu
         if AXUIElementPerformAction(currentIcon.element, "AXShowMenu" as CFString) == .success {
             return
         }
 
-        // 方案四：直接 AXPress
-        if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
-            return
+        // 最后：模拟鼠标点击（仅对可见图标有效）
+        if !isIconHidden(currentIcon) {
+            clickIconDirectly(currentIcon)
         }
-
-        print("⚠️ 无法激活隐藏图标: \(currentIcon.name)")
     }
 
     /// 递归查找可点击的子元素
@@ -772,6 +773,7 @@ class SwitcherController {
     private var panel: SwitcherPanel?
     private var icons: [StatusBarIcon] = []
     private var lastSelectedBundleId: String?  // 记住上次选中
+    private var lastActivatedBundleId: String?  // 记住上次激活的图标（用于关闭菜单）
     var isActive: Bool { panel?.isVisible ?? false }
 
     func show() {
@@ -815,11 +817,25 @@ class SwitcherController {
         // 记住这次选中的图标
         lastSelectedBundleId = selectedIcon.bundleId
 
-        panel.hideAnimated {
-            // Move icon to visible area and click it
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                StatusBarManager.shared.moveToVisibleAndClick(icon: selectedIcon)
-            }
+        // 隐藏面板
+        panel.hideAnimated()
+
+        // 关闭旧菜单
+        StatusBarManager.shared.dismissCurrentMenu()
+
+        // 如果有上次激活的图标且不是同一个，尝试 toggle 关闭它（针对 Lark 等顽固应用）
+        if let lastBundleId = lastActivatedBundleId,
+           lastBundleId != selectedIcon.bundleId,
+           let lastIcon = icons.first(where: { $0.bundleId == lastBundleId }) {
+            StatusBarManager.shared.activateIcon(icon: lastIcon)  // toggle off
+        }
+
+        // 记住这次激活的图标
+        lastActivatedBundleId = selectedIcon.bundleId
+
+        // 激活新图标
+        DispatchQueue.global().async {
+            StatusBarManager.shared.activateIcon(icon: selectedIcon)
         }
     }
 
@@ -909,10 +925,15 @@ class HotkeyManager {
                 }
 
                 // Ctrl + ` : 打开 Switcher / 选择下一个
+                // Ctrl + Shift + ` : 选择上一个
                 if keyCode == 50 && flags.contains(.maskControl) && !flags.contains(.maskCommand) {
                     DispatchQueue.main.async {
                         if SwitcherController.shared.isActive {
-                            SwitcherController.shared.selectNext()
+                            if flags.contains(.maskShift) {
+                                SwitcherController.shared.selectPrev()
+                            } else {
+                                SwitcherController.shared.selectNext()
+                            }
                         } else {
                             SwitcherController.shared.show()
                         }
