@@ -57,7 +57,7 @@ struct Config: Codable {
 
     static let configURL: URL = {
         let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent(".config/menu-bar-rotater")
+            .appendingPathComponent(".config/menutab")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         return dir.appendingPathComponent("config.json")
     }()
@@ -106,7 +106,7 @@ class StatusBarManager {
     var config = Config.load()
 
     // 自己的 bundle id 和 pid
-    private let selfBundleId = Bundle.main.bundleIdentifier ?? "MenuBarRotator"
+    private let selfBundleId = Bundle.main.bundleIdentifier ?? "MenuTab"
     private let selfPid = ProcessInfo.processInfo.processIdentifier
 
     // 图标缓存（使用 Serial Queue 保护并发访问）
@@ -114,7 +114,7 @@ class StatusBarManager {
     private var lastCacheTime: Date = .distantPast
     private let cacheTimeout: TimeInterval = 2.0
     private var isPreloading = false
-    private let dataQueue = DispatchQueue(label: "com.rotator.data")
+    private let dataQueue = DispatchQueue(label: "com.menutab.data")
 
     // JXA 脚本缓存（避免重复编译）
     private var scriptCache: [String: NSAppleScript] = [:]
@@ -1081,7 +1081,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         _ = StatusBarManager.shared  // 确保初始化
         HotkeyManager.shared.start()
 
-        print("🚀 Menu Bar Rotator 已启动")
+        print("🚀 MenuTab 已启动")
         print("   ⌃ `     打开切换器 / 选择下一个")
         print("   松开 ⌃  确认选择")
         print("   Esc     取消")
@@ -1091,7 +1091,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
 
         if let button = statusItem?.button {
-            button.image = NSImage(systemSymbolName: "arrow.left.arrow.right", accessibilityDescription: "Rotate")
+            button.image = NSImage(systemSymbolName: "menubar.rectangle", accessibilityDescription: "MenuTab")
         }
 
         updateMenu()
