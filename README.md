@@ -1,87 +1,61 @@
 # MenuTab
 
-**The App Switcher for your Menu Bar.**
+The App Switcher for your Menu Bar.
 
-A Cmd+Tab style switcher for macOS menu bar icons. Quickly access menu bar items hidden by the MacBook notch.
-
-![macOS 12+](https://img.shields.io/badge/macOS-12%2B-blue)
-![Swift](https://img.shields.io/badge/Swift-5.7-orange)
-![License](https://img.shields.io/badge/License-MIT%20with%20restrictions-green)
+A ⌘Tab-style switcher for macOS menu bar icons. Quickly access icons hidden by the MacBook notch.
 
 ## Features
 
-- 🔄 **Cmd+Tab Style Switcher** - Familiar UI for switching between menu bar icons
-- 👁 **Notch Detection** - Identifies icons hidden by MacBook notch
-- 🖥 **Multi-Screen Support** - Works correctly across multiple displays
-- 🚫 **Ignore List** - Exclude apps you don't want in the switcher
-- 👻 **Hidden Only Mode** - Focus only on icons hidden by the notch
+- **⌘Tab-style UI** — Familiar interface for switching menu bar icons
+- **Notch-aware** — Detects icons hidden behind the MacBook notch
+- **Multi-display** — Works correctly across multiple screens
+- **Customizable** — Ignore list and hidden-only mode
 
-## Installation
+## Install
 
-### Download
+Download `MenuTab-v0.0.1.dmg` from [Releases](../../releases), open it, drag to Applications.
 
-Download the latest `.dmg` from [Releases](../../releases), open it, and drag **MenuTab** to your Applications folder.
-
-### Build from Source
+Or build from source:
 
 ```bash
-git clone https://github.com/dongruixiao/menu-tab.git
+git clone https://github.com/nothing-but-myself/menu-tab.git
 cd menu-tab
 swift build -c release
 ```
 
-### First Run
-
-1. Open MenuTab
-2. Grant **Accessibility** permission when prompted:
-   - System Settings → Privacy & Security → Accessibility → Enable MenuTab
+**First run:** Grant Accessibility permission in System Settings → Privacy & Security → Accessibility.
 
 ## Usage
 
-### Shortcuts
-
 | Shortcut | Action |
 |----------|--------|
-| `Ctrl + \`` | Open switcher / Next icon |
-| `Ctrl + Shift + \`` | Previous icon |
-| Release `Ctrl` | Confirm selection |
+| `⌃ \`` | Open switcher / Next |
+| `⌃ ⇧ \`` | Previous |
+| Release `⌃` | Confirm |
 | `Esc` | Cancel |
 
-### Menu Options
+Click the menu bar icon for options:
+- **Hidden Icons Only** — Show only notch-hidden icons
+- **Ignore List** — Exclude specific apps
 
-Click the menu bar icon to access:
+## Config
 
-- **Hidden Icons Only** - Only show icons hidden by the notch
-- **Ignore List** - Select apps to exclude from the switcher
-- **Quit** - Exit MenuTab
-
-## Requirements
-
-- macOS 12.0 (Monterey) or later
-- Accessibility permission
-
-## How It Works
-
-MenuTab uses the Accessibility API (`AXUIElement`) to:
-
-1. Detect third-party menu bar icons via `AXExtrasMenuBar`
-2. Determine which screen each icon is on
-3. Calculate if icons are hidden by the notch using `safeAreaInsets`
-4. Trigger icon actions via `AXPress` or `AXShowMenu`
-
-## Configuration
-
-Config file location: `~/.config/menutab/config.json`
+`~/.config/menutab/config.json`
 
 ```json
 {
   "onlyShowHidden": false,
-  "ignoredApps": ["com.example.app"]
+  "ignoredApps": []
 }
 ```
 
+## Requirements
+
+- macOS 12.0+
+- Accessibility permission
+
 ## License
 
-MIT License with Commercial Restriction. See [LICENSE](LICENSE) for details.
+MIT with Commercial Restriction. See [LICENSE](LICENSE).
 
-Personal and non-commercial use is free. Commercial use (including App Store distribution) requires permission from the author.
+Free for personal use. Commercial use requires permission.

@@ -34,14 +34,6 @@ struct SystemInfo {
         return machine?.contains("arm64") ?? false
     }
 
-    /// 获取主显示器信息
-    static func getMainScreenInfo() -> (width: CGFloat, height: CGFloat, hasNotch: Bool) {
-        guard let screen = NSScreen.main else {
-            return (1470, 956, false)
-        }
-        return (screen.frame.width, screen.frame.height, hasNotch)
-    }
-
     /// 系统信息描述（简洁版）
     static var description: String {
         let chip = isAppleSilicon ? "M" : "Intel"
@@ -91,9 +83,6 @@ struct StatusBarIcon: Identifiable, Equatable {
     let y: CGFloat
     let width: CGFloat
 
-    var centerX: CGFloat { x + width / 2 }
-    var centerY: CGFloat { y + 12 }
-
     static func == (lhs: StatusBarIcon, rhs: StatusBarIcon) -> Bool {
         return lhs.id == rhs.id
     }
@@ -111,8 +100,6 @@ class StatusBarManager {
 
     // 图标缓存（使用 Serial Queue 保护并发访问）
     private var cachedIcons: [StatusBarIcon] = []
-    private var lastCacheTime: Date = .distantPast
-    private let cacheTimeout: TimeInterval = 2.0
     private var isPreloading = false
     private let dataQueue = DispatchQueue(label: "com.menutab.data")
 
@@ -144,7 +131,6 @@ class StatusBarManager {
     @objc private func invalidateCache() {
         dataQueue.async { [weak self] in
             self?.cachedIcons = []
-            self?.lastCacheTime = .distantPast
         }
     }
 
@@ -158,7 +144,6 @@ class StatusBarManager {
                 let icons = self.fetchAllIcons()
                 self.dataQueue.async {
                     self.cachedIcons = icons
-                    self.lastCacheTime = Date()
                     self.isPreloading = false
                 }
             }
@@ -175,7 +160,6 @@ class StatusBarManager {
             // 首次调用，同步获取（阻塞但保证线程安全）
             let icons = fetchAllIcons()
             cachedIcons = icons
-            lastCacheTime = Date()
             return excludeSelf ? cachedIcons.filter { $0.bundleId != selfBundleId } : cachedIcons
         }
     }
@@ -191,7 +175,6 @@ class StatusBarManager {
                 let icons = self.fetchAllIcons()
                 self.dataQueue.async {
                     self.cachedIcons = icons
-                    self.lastCacheTime = Date()
                 }
                 // 返回时排除自己
                 let filtered = icons.filter { $0.bundleId != self.selfBundleId }
@@ -287,34 +270,6 @@ class StatusBarManager {
         escDown?.post(tap: .cghidEventTap)
         let escUp = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)
         escUp?.post(tap: .cghidEventTap)
-    }
-
-    /// 通过发送 Escape 键关闭任何已打开的菜单
-    private func dismissOpenMenu() {
-        let src = CGEventSource(stateID: .combinedSessionState)
-
-        // 发送 Escape 键按下
-        let escDown = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: true)
-        escDown?.post(tap: .cghidEventTap)
-
-        // 发送 Escape 键松开
-        let escUp = CGEvent(keyboardEventSource: src, virtualKey: 0x35, keyDown: false)
-        escUp?.post(tap: .cghidEventTap)
-
-        usleep(50000)  // 等待菜单关闭
-    }
-
-    /// 触发菜单栏显示（用于全屏模式）
-    private func revealMenuBar() {
-        let src = CGEventSource(stateID: .combinedSessionState)
-        let screenWidth = NSScreen.main?.frame.width ?? 1470
-
-        // 将鼠标移到屏幕右上角（避开刘海区域），触发菜单栏显示
-        let topRight = CGPoint(x: screenWidth - 100, y: 0)
-        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: topRight, mouseButton: .left)?.post(tap: .cghidEventTap)
-
-        // 等待菜单栏动画完成（全屏模式需要更长时间）
-        usleep(500000)  // 500ms
     }
 
     /// 判断图标是否在刘海区域（考虑图标宽度）
