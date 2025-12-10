@@ -14,8 +14,12 @@ Or see all releases: [Releases](https://github.com/nothing-but-myself/menu-tab/r
 
 1. Open the downloaded `.dmg` file
 2. Drag **MenuTab** to **Applications**
-3. Open MenuTab from Applications
-4. Grant **Accessibility** permission when prompted:
+3. Remove quarantine attribute (required for unsigned apps):
+   ```bash
+   xattr -cr /Applications/MenuTab.app
+   ```
+4. Open MenuTab from Applications
+5. Grant **Accessibility** permission when prompted:
    - Click "Open System Settings"
    - Enable MenuTab in Privacy & Security → Accessibility
 
