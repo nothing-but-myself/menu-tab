@@ -355,7 +355,7 @@ class StatusBarManager {
         return !(iconRight < notchStart || iconLeft > notchEnd)
     }
 
-    /// 激活图标菜单（统一使用 Accessibility API）
+    /// 激活图标菜单（多策略尝试）
     func activateIcon(icon: StatusBarIcon) {
         // 重新获取图标最新位置
         let icons = getIcons(excludePinned: false, excludeSelf: true)
@@ -364,32 +364,81 @@ class StatusBarManager {
             return
         }
 
-        // 优先使用递归查找子按钮（最有效的方案）
+        // 策略1：递归查找支持 AXPress 的子元素（深度穿透）
         if let button = findClickableChild(currentIcon.element) {
-            AXUIElementPerformAction(button, kAXPressAction as CFString)
-            return
+            if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
+                return
+            }
         }
 
-        // 备选：聚焦后 AXPress
-        if AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success {
-            usleep(10000)  // 10ms
-            AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString)
-            return
+        // 策略2：递归查找支持 AXShowMenu 的子元素
+        if let menuElement = findShowMenuChild(currentIcon.element) {
+            if AXUIElementPerformAction(menuElement, "AXShowMenu" as CFString) == .success {
+                return
+            }
         }
 
-        // 备选：AXShowMenu
+        // 策略3：直接对容器尝试 AXShowMenu
         if AXUIElementPerformAction(currentIcon.element, "AXShowMenu" as CFString) == .success {
             return
         }
 
-        // 最后：模拟鼠标点击（仅对可见图标有效）
+        // 策略4：聚焦后 AXPress
+        if AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success {
+            if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
+                return
+            }
+        }
+
+        // 策略5：模拟鼠标点击（对可见图标有效，对 Stats 等 Custom View 应用也有效）
         if !isIconHidden(currentIcon) {
             clickIconDirectly(currentIcon)
+            return
+        }
+
+        // 策略6：JXA 终极方案（对隐藏图标使用 AppleScript）
+        clickViaJXA(appName: currentIcon.name, bundleId: currentIcon.bundleId)
+    }
+
+    /// 使用 JXA (JavaScript for Automation) 点击菜单栏图标
+    /// 这是终极方案，可以穿透刘海区域
+    private func clickViaJXA(appName: String, bundleId: String) {
+        let script = """
+        (function() {
+            var se = Application("System Events");
+            var procs = se.processes.whose({bundleIdentifier: "\(bundleId)"});
+            if (procs.length > 0) {
+                var proc = procs[0];
+                var menuBar = proc.menuBars[0];
+                if (menuBar) {
+                    var items = menuBar.menuBarItems();
+                    if (items.length > 0) {
+                        items[0].click();
+                        return true;
+                    }
+                }
+            }
+            return false;
+        })();
+        """
+
+        var error: NSDictionary?
+        if let appleScript = NSAppleScript(source: "ObjC.import('stdlib'); \(script)") {
+            appleScript.executeAndReturnError(&error)
         }
     }
 
-    /// 递归查找可点击的子元素
+    /// 递归查找可点击的子元素（深度穿透，不限制角色类型）
     private func findClickableChild(_ element: AXUIElement) -> AXUIElement? {
+        // 先检查当前元素是否支持 AXPress
+        var actionsRef: CFArray?
+        if AXUIElementCopyActionNames(element, &actionsRef) == .success,
+           let actions = actionsRef as? [String],
+           actions.contains(kAXPressAction) {
+            return element
+        }
+
+        // 遍历所有子元素
         var childrenRef: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
               let children = childrenRef as? [AXUIElement] else {
@@ -397,19 +446,30 @@ class StatusBarManager {
         }
 
         for child in children {
-            var roleRef: CFTypeRef?
-            if AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef) == .success,
-               let role = roleRef as? String {
-                if role == "AXButton" || role == "AXMenuBarItem" {
-                    var actionsRef: CFArray?
-                    if AXUIElementCopyActionNames(child, &actionsRef) == .success,
-                       let actions = actionsRef as? [String],
-                       actions.contains("AXPress") {
-                        return child
-                    }
-                }
-            }
             if let found = findClickableChild(child) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// 递归查找支持 AXShowMenu 的子元素
+    private func findShowMenuChild(_ element: AXUIElement) -> AXUIElement? {
+        var actionsRef: CFArray?
+        if AXUIElementCopyActionNames(element, &actionsRef) == .success,
+           let actions = actionsRef as? [String],
+           actions.contains("AXShowMenu") {
+            return element
+        }
+
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else {
+            return nil
+        }
+
+        for child in children {
+            if let found = findShowMenuChild(child) {
                 return found
             }
         }
@@ -486,19 +546,14 @@ class StatusBarManager {
         let src = CGEventSource(stateID: .combinedSessionState)
         let clickPoint = CGPoint(x: icon.centerX, y: icon.centerY)
 
-        // 移动到图标位置
+        // 移动并点击（最小延迟）
         CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: clickPoint, mouseButton: .left)?.post(tap: .cghidEventTap)
-        usleep(50000)
 
-        // 点击
         let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: clickPoint, mouseButton: .left)
         mouseDown?.post(tap: .cghidEventTap)
-        usleep(30000)
 
         let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: clickPoint, mouseButton: .left)
         mouseUp?.post(tap: .cghidEventTap)
-
-        // 不恢复鼠标位置，让鼠标留在状态栏区域，保持菜单可见
     }
 
     /// 旧方法名保留兼容
@@ -609,9 +664,14 @@ class SwitcherPanel: NSPanel {
         selectionBox = NSBox(frame: .zero)
         selectionBox.boxType = .custom
         selectionBox.borderColor = NSColor.controlAccentColor
-        selectionBox.borderWidth = 3
-        selectionBox.cornerRadius = 8
-        selectionBox.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.2)
+        selectionBox.borderWidth = 2
+        selectionBox.cornerRadius = 10
+        selectionBox.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.15)
+        selectionBox.wantsLayer = true
+        selectionBox.shadow = NSShadow()
+        selectionBox.shadow?.shadowColor = NSColor.controlAccentColor.withAlphaComponent(0.5)
+        selectionBox.shadow?.shadowBlurRadius = 8
+        selectionBox.shadow?.shadowOffset = NSSize(width: 0, height: 0)
         containerView.addSubview(selectionBox)
 
         nameLabel = NSTextField(labelWithString: "")
@@ -638,10 +698,10 @@ class SwitcherPanel: NSPanel {
         let panelWidth = max(totalWidth, 200)
         let panelHeight: CGFloat = 100
 
-        // Position panel at screen center
+        // Position panel at main screen center (只在主屏幕显示)
         if let screen = NSScreen.main {
-            let x = (screen.frame.width - panelWidth) / 2
-            let y = (screen.frame.height - panelHeight) / 2 + 100
+            let x = screen.frame.origin.x + (screen.frame.width - panelWidth) / 2
+            let y = screen.frame.origin.y + (screen.frame.height - panelHeight) / 2 + 100
             setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
         }
 
@@ -905,7 +965,6 @@ class HotkeyManager {
                 if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
                     if let tap = HotkeyManager.shared.eventTap {
                         CGEvent.tapEnable(tap: tap, enable: true)
-                        print("🔄 Event tap 已重新启用")
                     }
                     return Unmanaged.passUnretained(event)
                 }
