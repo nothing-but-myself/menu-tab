@@ -337,76 +337,167 @@ class StatusBarManager {
         return !(iconRight < notchStart || iconLeft > notchEnd)
     }
 
-    /// 激活图标菜单（多策略尝试）
+    /// 激活图标菜单
     func activateIcon(icon: StatusBarIcon) {
         // 先关闭任何已打开的菜单
         dismissOpenMenu()
 
-        // 显示菜单栏（全屏模式）
-        revealMenuBar()
-
         // 重新获取图标最新位置
-        var icons = getIcons(excludePinned: false, excludeSelf: true)
-        guard var currentIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
-            // 图标可能已消失，尝试用旧的 element 直接触发
-            AXUIElementPerformAction(icon.element, kAXPressAction as CFString)
+        let icons = getIcons(excludePinned: false, excludeSelf: true)
+        guard let currentIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
+            print("❌ 找不到图标: \(icon.name)")
             return
         }
 
-        // 检查图标是否在刘海区域
-        if isIconHidden(currentIcon) {
-            // 策略: 通过轮换把隐藏图标移到可见区域
-            // 计算需要轮换多少次
-            let screenWidth = NSScreen.main?.frame.width ?? 1470
-            let notchEnd = (screenWidth / 2) + 120
-
-            // 找到目标图标在列表中的位置
-            guard let targetIndex = icons.firstIndex(where: { $0.bundleId == icon.bundleId }) else {
-                return
-            }
-
-            // 找到第一个可见图标的位置
-            guard let firstVisibleIndex = icons.firstIndex(where: { !isIconHidden($0) && $0.x > notchEnd }) else {
-                // 没有可见图标，直接尝试点击
-                clickIconDirectly(currentIcon)
-                return
-            }
-
-            // 如果目标在可见区域左边，需要向右轮换（把左边的移到右边）
-            if targetIndex < firstVisibleIndex {
-                let rotationsNeeded = firstVisibleIndex - targetIndex
-                for _ in 0..<rotationsNeeded {
-                    rotateLeft()  // 把最左边的图标移到最右边
-                    usleep(300000)  // 等待轮换完成
-                }
-            }
-
-            // 轮换后重新获取位置
-            usleep(200000)
-            icons = getIcons(excludePinned: false, excludeSelf: true)
-            guard let updatedIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
-                return
-            }
-            currentIcon = updatedIcon
-        }
-
-        // 现在图标应该在可见区域了，尝试激活
-        // 方法1: AX Press
-        let result = AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString)
-        if result == .success {
+        // 如果图标可见，直接点击
+        if !isIconHidden(currentIcon) {
+            revealMenuBar()  // 全屏模式下先显示菜单栏
+            clickIconDirectly(currentIcon)
             return
         }
 
-        // 方法2: 模拟点击
-        clickIconDirectly(currentIcon)
+        // 图标在刘海后面，尝试多种激活方式
+
+        // 方案一：聚焦 + AXPress
+        let focusResult = AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef)
+        if focusResult == .success {
+            usleep(100000)
+            if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
+                return
+            }
+        }
+
+        // 方案二：递归查找子按钮
+        if let button = findClickableChild(currentIcon.element) {
+            if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
+                return
+            }
+        }
+
+        // 方案三：AXShowMenu
+        if AXUIElementPerformAction(currentIcon.element, "AXShowMenu" as CFString) == .success {
+            return
+        }
+
+        // 方案四：直接 AXPress
+        if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
+            return
+        }
+
+        print("⚠️ 无法激活隐藏图标: \(currentIcon.name)")
     }
 
-    /// 直接点击图标（不移动）
+    /// 递归查找可点击的子元素
+    private func findClickableChild(_ element: AXUIElement) -> AXUIElement? {
+        var childrenRef: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+              let children = childrenRef as? [AXUIElement] else {
+            return nil
+        }
+
+        for child in children {
+            var roleRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(child, kAXRoleAttribute as CFString, &roleRef) == .success,
+               let role = roleRef as? String {
+                if role == "AXButton" || role == "AXMenuBarItem" {
+                    var actionsRef: CFArray?
+                    if AXUIElementCopyActionNames(child, &actionsRef) == .success,
+                       let actions = actionsRef as? [String],
+                       actions.contains("AXPress") {
+                        return child
+                    }
+                }
+            }
+            if let found = findClickableChild(child) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    /// 把图标移到最左边
+    func moveIconToLeft(_ icon: StatusBarIcon) {
+        let icons = getIcons(excludePinned: false, excludeSelf: true)
+        guard let currentIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
+            print("❌ 找不到图标")
+            return
+        }
+
+        // 如果图标在刘海后面，无法移动
+        if isIconHidden(currentIcon) {
+            print("⚠️ 刘海后的图标无法移动")
+            return
+        }
+
+        guard let leftmost = icons.first else { return }
+
+        // 已经是最左边了
+        if currentIcon.bundleId == leftmost.bundleId {
+            print("ℹ️ 已经在最左边")
+            return
+        }
+
+        let targetX = leftmost.x - 20
+        print("📍 移动到最左: \(currentIcon.name) -> x=\(targetX)")
+        moveIconTo(currentIcon, targetX: targetX)
+    }
+
+    /// 把图标移到最右边
+    func moveIconToRight(_ icon: StatusBarIcon) {
+        let icons = getIcons(excludePinned: false, excludeSelf: true)
+        guard let currentIcon = icons.first(where: { $0.bundleId == icon.bundleId }) else {
+            print("❌ 找不到图标")
+            return
+        }
+
+        // 如果图标在刘海后面，无法移动
+        if isIconHidden(currentIcon) {
+            print("⚠️ 刘海后的图标无法移动")
+            return
+        }
+
+        guard let rightmost = icons.last else { return }
+
+        // 已经是最右边了
+        if currentIcon.bundleId == rightmost.bundleId {
+            print("ℹ️ 已经在最右边")
+            return
+        }
+
+        let targetX = rightmost.x + rightmost.width + 20
+        print("📍 移动到最右: \(currentIcon.name) -> x=\(targetX)")
+        moveIconTo(currentIcon, targetX: targetX)
+    }
+
+    /// 把图标移动到指定 X 位置
+    private func moveIconTo(_ icon: StatusBarIcon, targetX: CGFloat) {
+        let fromX = icon.centerX
+        let fromY = icon.centerY
+        let toX = targetX
+        let toY = fromY
+
+        print("  移动: from x=\(fromX) to x=\(toX)")
+        simulateDrag(from: CGPoint(x: fromX, y: fromY), to: CGPoint(x: toX, y: toY))
+    }
+
+    /// 直接点击图标（不恢复鼠标位置，保持菜单栏可见）
     private func clickIconDirectly(_ icon: StatusBarIcon) {
-        let originalPosition = NSEvent.mouseLocation
-        let screenHeight = NSScreen.main?.frame.height ?? 0
-        let originalCGPoint = CGPoint(x: originalPosition.x, y: screenHeight - originalPosition.y)
-        clickIcon(icon, restoreTo: originalCGPoint)
+        let src = CGEventSource(stateID: .combinedSessionState)
+        let clickPoint = CGPoint(x: icon.centerX, y: icon.centerY)
+
+        // 移动到图标位置
+        CGEvent(mouseEventSource: src, mouseType: .mouseMoved, mouseCursorPosition: clickPoint, mouseButton: .left)?.post(tap: .cghidEventTap)
+        usleep(50000)
+
+        // 点击
+        let mouseDown = CGEvent(mouseEventSource: src, mouseType: .leftMouseDown, mouseCursorPosition: clickPoint, mouseButton: .left)
+        mouseDown?.post(tap: .cghidEventTap)
+        usleep(30000)
+
+        let mouseUp = CGEvent(mouseEventSource: src, mouseType: .leftMouseUp, mouseCursorPosition: clickPoint, mouseButton: .left)
+        mouseUp?.post(tap: .cghidEventTap)
+
+        // 不恢复鼠标位置，让鼠标留在状态栏区域，保持菜单可见
     }
 
     /// 旧方法名保留兼容
@@ -735,6 +826,47 @@ class SwitcherController {
     func cancel() {
         panel?.hideAnimated()
     }
+
+    func moveSelectedToLeft() {
+        guard let panel = panel, panel.isVisible else { return }
+        let selectedIndex = panel.selectedIndex
+        guard selectedIndex >= 0 && selectedIndex < icons.count else { return }
+
+        let icon = icons[selectedIndex]
+        StatusBarManager.shared.moveIconToLeft(icon)
+
+        // 刷新 UI
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.refreshPanel()
+        }
+    }
+
+    func moveSelectedToRight() {
+        guard let panel = panel, panel.isVisible else { return }
+        let selectedIndex = panel.selectedIndex
+        guard selectedIndex >= 0 && selectedIndex < icons.count else { return }
+
+        let icon = icons[selectedIndex]
+        StatusBarManager.shared.moveIconToRight(icon)
+
+        // 刷新 UI
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+            self.refreshPanel()
+        }
+    }
+
+    private func refreshPanel() {
+        guard let panel = panel else { return }
+        let currentBundleId = icons[safe: panel.selectedIndex]?.bundleId
+        icons = StatusBarManager.shared.getIcons(excludePinned: false, excludeSelf: true)
+        panel.configure(with: icons, lastSelectedBundleId: currentBundleId)
+    }
+}
+
+extension Array {
+    subscript(safe index: Int) -> Element? {
+        return indices.contains(index) ? self[index] : nil
+    }
 }
 
 // MARK: - Global Hotkey Manager
@@ -764,28 +896,23 @@ class HotkeyManager {
 
                 let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
                 let flags = event.flags
-                let eventType = CGEventType(rawValue: UInt32(type.rawValue))
+                let eventType = type
 
-                // Handle Ctrl release when switcher is active
+                // 松开 Ctrl 时确认选择（Cmd+Tab 风格）
                 if eventType == .flagsChanged {
                     if SwitcherController.shared.isActive && !flags.contains(.maskControl) {
                         DispatchQueue.main.async {
                             SwitcherController.shared.confirm()
                         }
-                        return Unmanaged.passUnretained(event)
                     }
                     return Unmanaged.passUnretained(event)
                 }
 
-                // Ctrl + ` (keyCode 50) : Show switcher / select next
+                // Ctrl + ` : 打开 Switcher / 选择下一个
                 if keyCode == 50 && flags.contains(.maskControl) && !flags.contains(.maskCommand) {
                     DispatchQueue.main.async {
                         if SwitcherController.shared.isActive {
-                            if flags.contains(.maskShift) {
-                                SwitcherController.shared.selectPrev()
-                            } else {
-                                SwitcherController.shared.selectNext()
-                            }
+                            SwitcherController.shared.selectNext()
                         } else {
                             SwitcherController.shared.show()
                         }
@@ -793,7 +920,7 @@ class HotkeyManager {
                     return nil
                 }
 
-                // Esc : Cancel switcher
+                // Esc : 取消
                 if keyCode == 53 && SwitcherController.shared.isActive {
                     DispatchQueue.main.async {
                         SwitcherController.shared.cancel()
@@ -858,9 +985,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         HotkeyManager.shared.start()
 
         print("🚀 Menu Bar Rotator 已启动")
-        print("   ⌃ `     图标切换器")
-        print("   ⌘ ⇧ ←  向左流动")
-        print("   ⌘ ⇧ →  向右流动")
+        print("   ⌃ `     打开切换器 / 选择下一个")
+        print("   松开 ⌃  确认选择")
+        print("   Esc     取消")
     }
 
     func setupStatusItem() {
