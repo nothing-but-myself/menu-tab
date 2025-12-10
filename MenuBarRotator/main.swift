@@ -42,9 +42,11 @@ struct SystemInfo {
         return (screen.frame.width, screen.frame.height, hasNotch)
     }
 
-    /// 系统信息描述
+    /// 系统信息描述（简洁版）
     static var description: String {
-        "macOS \(osMajor).\(osMinor), \(isAppleSilicon ? "Apple Silicon" : "Intel"), 刘海：\(hasNotch ? "有" : "无")"
+        let chip = isAppleSilicon ? "M" : "Intel"
+        let notch = hasNotch ? "⌓" : ""  // ⌓ 表示刘海
+        return "\(osMajor).\(osMinor) · \(chip)\(notch.isEmpty ? "" : " · \(notch)")"
     }
 }
 
@@ -316,30 +318,60 @@ class StatusBarManager {
     }
 
     /// 判断图标是否在刘海区域（考虑图标宽度）
-    /// 使用 safeAreaInsets 动态计算刘海区域（macOS 12+）
+    /// 基于图标物理所在的屏幕判断，而非当前操作屏幕
     func isIconHidden(_ icon: StatusBarIcon) -> Bool {
-        guard let screen = NSScreen.main else { return false }
-
-        // 使用 safeAreaInsets 获取刘海区域（macOS 12+）
-        // safeAreaInsets.top > 0 表示有刘海
-        let safeArea = screen.safeAreaInsets
-        if safeArea.top == 0 {
-            // 没有刘海，所有图标都可见
+        // 1. 根据图标坐标找到它所在的屏幕
+        //    注意：icon.x/y 是 CG 坐标系（左上角原点，Y 向下）
+        //    NSScreen.frame 是 Cocoa 坐标系（左下角原点，Y 向上）
+        guard let screen = findScreen(forIconX: icon.x, iconY: icon.y) else {
             return false
         }
 
-        // 刘海区域计算：屏幕中央，宽度约为 safeAreaInsets 暗示的区域
-        // 由于 safeAreaInsets 只给出顶部高度，刘海宽度需要估算
-        // 实际刘海宽度约 200-240px，我们用屏幕中央 ± 刘海宽度/2
-        let screenWidth = screen.frame.width
-        let notchWidth: CGFloat = 240  // 保守估计，覆盖所有机型
-        let notchStart = (screenWidth / 2) - (notchWidth / 2)
-        let notchEnd = (screenWidth / 2) + (notchWidth / 2)
+        // 2. 检测该屏幕是否有刘海
+        let safeArea = screen.safeAreaInsets
+        if safeArea.top == 0 {
+            // 没有刘海，图标可见
+            return false
+        }
 
+        // 3. 计算刘海区域（相对于该屏幕）
+        //    刘海在屏幕顶部中央，宽度约 240px
+        let screenWidth = screen.frame.width
+        let screenOriginX = screen.frame.origin.x
+        let notchWidth: CGFloat = 240  // 保守估计，覆盖所有机型
+        let notchStart = screenOriginX + (screenWidth / 2) - (notchWidth / 2)
+        let notchEnd = screenOriginX + (screenWidth / 2) + (notchWidth / 2)
+
+        // 4. 判断图标是否与刘海区域重叠
         let iconLeft = icon.x
         let iconRight = icon.x + icon.width
 
         return !(iconRight < notchStart || iconLeft > notchEnd)
+    }
+
+    /// 根据图标的 CG 坐标找到它所在的屏幕
+    private func findScreen(forIconX iconX: CGFloat, iconY: CGFloat) -> NSScreen? {
+        // CG 坐标系 -> Cocoa 坐标系转换
+        // CG: 左上角原点，Y 向下
+        // Cocoa: 主屏幕左下角原点，Y 向上
+        //
+        // 转换公式：cocoaY = mainScreenHeight - cgY
+        // 但对于菜单栏图标，我们主要关心 X 坐标来确定屏幕
+        // Y 坐标用于辅助验证（菜单栏图标的 Y 应该在屏幕顶部附近）
+
+        for screen in NSScreen.screens {
+            let frame = screen.frame
+
+            // 检查 X 坐标是否在该屏幕范围内
+            if iconX >= frame.origin.x && iconX < frame.origin.x + frame.width {
+                // 菜单栏图标的 Y 坐标在 CG 坐标系中是很小的值（接近屏幕顶部）
+                // 我们主要依赖 X 坐标判断，因为菜单栏图标一定在屏幕顶部
+                return screen
+            }
+        }
+
+        // 如果找不到匹配的屏幕，fallback 到主屏幕
+        return NSScreen.main
     }
 
     /// 激活图标菜单（多策略尝试）
@@ -1115,10 +1147,9 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(NSMenuItem.separator())
 
-        // System info
-        let infoItem = NSMenuItem(title: "System: \(SystemInfo.description)", action: nil, keyEquivalent: "")
+        // System info (简洁显示)
+        let infoItem = NSMenuItem(title: SystemInfo.description, action: nil, keyEquivalent: "")
         infoItem.isEnabled = false
-        infoItem.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)
         menu.addItem(infoItem)
 
         menu.addItem(NSMenuItem.separator())
