@@ -1,64 +1,81 @@
-# MenuTab
+# What's Hidden? 🔍
 
-The App Switcher for your Menu Bar.
+> 发现并访问被刘海遮挡的菜单栏图标
 
-A ⌘Tab-style switcher for macOS menu bar icons. Quickly access icons hidden by the MacBook notch.
+MacBook Pro 的刘海屏幕会遮挡部分菜单栏图标，让它们变得不可见。**What's Hidden?** 帮助你快速发现和访问这些隐藏的图标。
 
-## Download
+## ✨ 特性
 
-**[⬇ Download MenuTab-v0.0.1.dmg](https://github.com/nothing-but-myself/menu-tab/releases/download/v0.0.1/MenuTab-v0.0.1.dmg)**
+- 🎯 **专注隐藏图标** - 只显示被刘海遮挡的图标
+- ⚡ **快捷键驱动** - 无需鼠标，一键轮换
+- 🪶 **轻量无干扰** - 没有状态栏图标，不占用宝贵的菜单栏空间
+- 🎨 **优雅 UI** - 类似 Cmd+Tab 的浮窗体验
 
-Or see all releases: [Releases](https://github.com/nothing-but-myself/menu-tab/releases)
+## 🚀 使用方法
 
-## Install
+| 快捷键 | 功能 |
+|--------|------|
+| `Ctrl + \`` | 显示隐藏图标 / 切换到下一个 |
+| `Ctrl + Shift + \`` | 切换到上一个 |
+| 松开 `Ctrl` | 确认选择 |
+| `Esc` | 取消 |
 
-1. Open the downloaded `.dmg` file
-2. Drag **MenuTab** to **Applications**
-3. Remove quarantine attribute (required for unsigned apps):
-   ```bash
-   xattr -cr /Applications/MenuTab.app
-   ```
-4. Open MenuTab from Applications
-5. Grant **Accessibility** permission when prompted:
-   - Click "Open System Settings"
-   - Enable MenuTab in Privacy & Security → Accessibility
+## 📦 安装
 
-## Usage
-
-| Shortcut | Action |
-|----------|--------|
-| `⌃ \`` | Open switcher / Next icon |
-| `⌃ ⇧ \`` | Previous icon |
-| Release `⌃` | Confirm selection |
-| `Esc` | Cancel |
-
-**Menu bar options** (click the MenuTab icon):
-- **Hidden Icons Only** — Only show icons hidden by the notch
-- **Ignore List** — Exclude specific apps from the switcher
-
-## Features
-
-- **⌘Tab-style UI** — Familiar interface for switching menu bar icons
-- **Notch-aware** — Detects icons hidden behind the MacBook notch
-- **Multi-display** — Works correctly across multiple screens
-- **Customizable** — Ignore list and hidden-only mode
-
-## Build from Source
+### 从源码构建
 
 ```bash
-git clone https://github.com/nothing-but-myself/menu-tab.git
-cd menu-tab
+git clone https://github.com/your-repo/whats-hidden.git
+cd whats-hidden
 swift build -c release
-open .build/release/MenuTab
 ```
 
-## Requirements
+### 运行
 
-- macOS 12.0 (Monterey) or later
-- Accessibility permission
+```bash
+.build/release/WhatsHidden
+```
 
-## License
+### 权限
 
-MIT with Commercial Restriction. See [LICENSE](LICENSE).
+首次运行需要授予**辅助功能权限**：
 
-Free for personal use. Commercial use requires permission.
+系统设置 → 隐私与安全性 → 辅助功能 → 添加 WhatsHidden
+
+## ❤️ 空状态
+
+当没有隐藏图标时，会显示一个温馨提示：
+
+> ❤️ All your icons are visible!
+
+这意味着你的菜单栏很整洁，所有图标都可见！
+
+## 🛠 技术栈
+
+- Swift 5.7+
+- macOS 12 (Monterey) +
+- Accessibility API
+- CGEvent (全局快捷键)
+
+## 📁 项目结构
+
+```
+WhatsHidden/
+├── Sources/WhatsHidden/
+│   ├── main.swift              # 入口
+│   ├── App/
+│   │   └── AppDelegate.swift   # 应用生命周期 & 控制器
+│   ├── Core/
+│   │   ├── StatusBarIcon.swift # 数据模型
+│   │   ├── IconFetcher.swift   # 获取隐藏图标
+│   │   └── IconActivator.swift # 激活图标
+│   ├── UI/
+│   │   └── SwitcherPanel.swift # 浮窗 UI
+│   └── Hotkey/
+│       └── HotkeyManager.swift # 快捷键监听
+└── Package.swift
+```
+
+## 📄 License
+
+MIT License
