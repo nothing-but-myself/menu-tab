@@ -203,49 +203,75 @@ class StatusBarManager {
     /// 实际获取所有图标（IPC 调用，可能耗时）
     private func fetchAllIcons() -> [StatusBarIcon] {
         var icons: [StatusBarIcon] = []
-        var seenElementIds = Set<Int>()  // 使用元素 ID 去重，允许同一 App 多个图标
+        var seenElementIds = Set<Int>()
 
         let runningApps = NSWorkspace.shared.runningApplications
         for app in runningApps {
             guard let bundleId = app.bundleIdentifier else { continue }
 
-            // 跳过自己（使用 pid 更可靠）
+            // 跳过自己
             if app.processIdentifier == selfPid { continue }
             if bundleId.hasPrefix("com.apple.") { continue }
+            
+            // 调试日志
+            let isTargetApp = (app.localizedName?.lowercased().contains("stats") == true || app.localizedName?.lowercased().contains("charles") == true)
 
             let appElement = AXUIElementCreateApplication(app.processIdentifier)
             var extras: CFTypeRef?
 
-            // AXUIElement 是 CFTypeRef，直接转换
+            // 1. 获取菜单栏容器 (AXExtrasMenuBar)
             guard AXUIElementCopyAttributeValue(appElement, "AXExtrasMenuBar" as CFString, &extras) == .success,
-                  let extrasRef = extras else { continue }
+                  let extrasRef = extras,
+                  CFGetTypeID(extrasRef) == AXUIElementGetTypeID() else { continue }
+            
+            let containerElement = extrasRef as! AXUIElement
+            
+            // 2. 关键修复：获取容器里的所有子元素 (Items)
+            // 以前我们直接用了 containerElement，现在我们要用 children
+            var childrenRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(containerElement, kAXChildrenAttribute as CFString, &childrenRef) == .success,
+                  let children = childrenRef as? [AXUIElement],
+                  !children.isEmpty else {
+                
+                // 如果没有子元素（极少见），才降级使用容器本身
+                if isTargetApp { print("   ⚠️ \(app.localizedName ?? "") container has no children, fallback to container") }
+                processIconElement(containerElement, app: app, bundleId: bundleId, icons: &icons, seenIds: &seenElementIds)
+                continue
+            }
+            
+            if isTargetApp { print("   ℹ️ \(app.localizedName ?? "") has \(children.count) items (Children)") }
 
-            // CFTypeRef -> AXUIElement（安全转换，CFGetTypeID 验证）
-            guard CFGetTypeID(extrasRef) == AXUIElementGetTypeID() else { continue }
-            let extrasElement = extrasRef as! AXUIElement
-            guard let pos = getPosition(extrasElement),
-                  let size = getSize(extrasElement),
-                  size.width > 0 && pos.y < 50 else { continue }
-
-            // 使用 CFHash 生成唯一 ID
-            let elementId = Int(CFHash(extrasElement))
-            if seenElementIds.contains(elementId) { continue }
-            seenElementIds.insert(elementId)
-
-            let name = app.localizedName ?? bundleId
-            icons.append(StatusBarIcon(
-                id: elementId,
-                name: name,
-                bundleId: bundleId,
-                element: extrasElement,
-                x: pos.x,
-                y: pos.y,
-                width: size.width
-            ))
+            // 3. 遍历所有子元素作为独立图标
+            for child in children {
+                processIconElement(child, app: app, bundleId: bundleId, icons: &icons, seenIds: &seenElementIds)
+            }
         }
 
         icons.sort { $0.x < $1.x }
         return icons
+    }
+    
+    /// 处理单个 UI 元素并将其转换为图标
+    private func processIconElement(_ element: AXUIElement, app: NSRunningApplication, bundleId: String, icons: inout [StatusBarIcon], seenIds: inout Set<Int>) {
+        guard let pos = getPosition(element),
+              let size = getSize(element),
+              size.width > 0 && pos.y < 50 else { return }
+
+        // 使用 CFHash 生成唯一 ID
+        let elementId = Int(CFHash(element))
+        if seenIds.contains(elementId) { return }
+        seenIds.insert(elementId)
+
+        let name = app.localizedName ?? bundleId
+        icons.append(StatusBarIcon(
+            id: elementId,
+            name: name,
+            bundleId: bundleId,
+            element: element, // 这里现在绑定的是具体的 Item，而不是 Bar
+            x: pos.x,
+            y: pos.y,
+            width: size.width
+        ))
     }
 
 
@@ -329,44 +355,234 @@ class StatusBarManager {
         return NSScreen.main
     }
 
+    /// 检测指定屏幕是否被全屏应用覆盖
+    /// - Parameter iconX: 图标的 X 坐标，用于确定图标所在的屏幕
+    private func isScreenInFullscreenMode(iconX: CGFloat) -> Bool {
+        // 找到图标所在的屏幕
+        guard let iconScreen = findScreen(forIconX: iconX, iconY: 0) else {
+            return false
+        }
+        
+        // 检查所有运行中的应用，看是否有全屏窗口在这个屏幕上
+        for app in NSWorkspace.shared.runningApplications {
+            guard app.activationPolicy == .regular else { continue }
+            
+            let appElement = AXUIElementCreateApplication(app.processIdentifier)
+            var windowsRef: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+                  let windows = windowsRef as? [AXUIElement] else { continue }
+            
+            for window in windows {
+                // 检查窗口是否全屏
+                var fullscreenRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(window, "AXFullScreen" as CFString, &fullscreenRef) == .success,
+                   let isFullscreen = fullscreenRef as? Bool, isFullscreen {
+                    // 检查这个全屏窗口是否在图标所在的屏幕上
+                    var posRef: CFTypeRef?
+                    if AXUIElementCopyAttributeValue(window, kAXPositionAttribute as CFString, &posRef) == .success,
+                       CFGetTypeID(posRef!) == AXValueGetTypeID() {
+                        var windowPos = CGPoint.zero
+                        AXValueGetValue(posRef as! AXValue, .cgPoint, &windowPos)
+                        
+                        // 检查窗口位置是否在图标所在屏幕范围内
+                        let screenFrame = iconScreen.frame
+                        if windowPos.x >= screenFrame.origin.x && windowPos.x < screenFrame.origin.x + screenFrame.width {
+                            return true
+                        }
+                    }
+                }
+            }
+        }
+        return false
+    }
+    
+    /// 简单检测：当前最前面的应用是否全屏
+    private func isInFullscreenMode() -> Bool {
+        if let frontApp = NSWorkspace.shared.frontmostApplication {
+            let appElement = AXUIElementCreateApplication(frontApp.processIdentifier)
+            var windowsRef: CFTypeRef?
+            if AXUIElementCopyAttributeValue(appElement, kAXWindowsAttribute as CFString, &windowsRef) == .success,
+               let windows = windowsRef as? [AXUIElement], !windows.isEmpty {
+                var fullscreenRef: CFTypeRef?
+                if AXUIElementCopyAttributeValue(windows[0], "AXFullScreen" as CFString, &fullscreenRef) == .success,
+                   let isFullscreen = fullscreenRef as? Bool {
+                    return isFullscreen
+                }
+            }
+        }
+        return false
+    }
+    
+    /// 模拟物理鼠标点击（优化版：光标自动归位，尽可能减少视觉干扰）
+    /// 关键：Stats 等应用使用 sendAction(on: [.leftMouseDown]) 监听事件
+    /// 因此需要真实的 mouseDown 事件，且持续时间要足够长
+    private func simulatePhysicalClick(on icon: StatusBarIcon) {
+        // 1. 获取当前鼠标位置（用于之后归位）
+        let currentLoc = CGEvent(source: nil)?.location
+        
+        let source = CGEventSource(stateID: .hidSystemState)
+        
+        // 2. 计算点击坐标（图标中心）
+        let clickX = icon.x + (icon.width / 2)
+        
+        // 3. 检测图标所在屏幕是否被全屏应用覆盖
+        let isFullscreen = isScreenInFullscreenMode(iconX: icon.x)
+        var clickY: CGFloat
+        
+        // 关键修复：全屏模式下 Accessibility API 返回的 Y 坐标可能是负数或异常值
+        // 菜单栏始终在屏幕顶部，所以 Y 坐标应该在 0-24 范围内
+        if icon.y < 0 || icon.y > 50 {
+            // 坐标异常，使用固定的菜单栏中心位置
+            clickY = 12  // 菜单栏高度 24pt 的中心
+            print("   ⚠️ Abnormal Y coord (\(icon.y)), using fixed Y=12")
+        } else {
+            clickY = icon.y + 12
+        }
+        
+        print("   📍 Icon: x=\(icon.x), y=\(icon.y), w=\(icon.width) → click at (\(clickX), \(clickY))")
+        
+        // 4. 全屏模式：先触发菜单栏显示
+        if isFullscreen {
+            print("   🖥 Fullscreen: moving to top to trigger menu bar...")
+            let topPoint = CGPoint(x: clickX, y: 0)
+            if let moveToTop = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: topPoint, mouseButton: .left) {
+                moveToTop.post(tap: .cghidEventTap)
+                usleep(300000)  // 300ms - 全屏模式下等待菜单栏完全滑出
+            }
+        }
+        
+        let targetPoint = CGPoint(x: clickX, y: clickY)
+        
+        // 5. 准备点击事件
+        guard let moveEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: targetPoint, mouseButton: .left),
+              let mouseDown = CGEvent(mouseEventSource: source, mouseType: .leftMouseDown, mouseCursorPosition: targetPoint, mouseButton: .left),
+              let mouseUp = CGEvent(mouseEventSource: source, mouseType: .leftMouseUp, mouseCursorPosition: targetPoint, mouseButton: .left) else {
+            print("   ❌ Failed to create mouse events")
+            return
+        }
+        
+        // 6. 执行点击序列
+        // 先移动光标到目标位置
+        moveEvent.post(tap: .cghidEventTap)
+        usleep(30000)  // 30ms - 等待光标移动完成并被系统识别
+        
+        // 执行鼠标按下
+        mouseDown.post(tap: .cghidEventTap)
+        usleep(100000) // 100ms - 增加按下时间，确保被识别
+        
+        // 执行鼠标抬起
+        mouseUp.post(tap: .cghidEventTap)
+        usleep(20000)  // 20ms - 等待点击事件被处理
+        
+        print("   🖱 Click executed at (\(clickX), \(clickY))\(isFullscreen ? " [fullscreen]" : "")")
+        
+        // 7. 归位光标
+        if let originalPos = currentLoc {
+            if let restoreEvent = CGEvent(mouseEventSource: source, mouseType: .mouseMoved, mouseCursorPosition: originalPos, mouseButton: .left) {
+                restoreEvent.post(tap: .cghidEventTap)
+            }
+        }
+        
+        print("   ✅ Done")
+    }
+
     /// 激活图标菜单（多策略尝试）
     func activateIcon(icon: StatusBarIcon) {
-        // 重新获取图标最新位置，使用 ID 精确匹配（解决同一 App 多个图标的问题）
+        print("⚡️ Attempting to activate: \(icon.name) (Bundle: \(icon.bundleId))")
+        
+        // 重新获取图标最新位置
         let icons = getIcons(excludeSelf: true)
         guard let currentIcon = icons.first(where: { $0.id == icon.id }) else {
             print("❌ 图标已失效或找不到：\(icon.name)")
             return
         }
-
-        // 策略 1：递归查找支持 AXPress 的子元素（深度穿透）
-        if let button = findClickableChild(currentIcon.element) {
-            if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
-                return
-            }
+        
+        // 打印一下当前操作元素的 Role，确认我们点的是 Item
+        var role: CFTypeRef?
+        AXUIElementCopyAttributeValue(currentIcon.element, kAXRoleAttribute as CFString, &role)
+        print("   ℹ️ Target Role: \(role ?? "unknown" as CFString)")
+        
+        // === 关键修复 ===
+        // Stats: AXPress 返回 success 但不弹出菜单，需要真实鼠标事件
+        // Charles: Java 应用，AXPress 返回成功但完全无效，跳过 AXPress 尝试 JXA
+        let needsPhysicalClickApps = ["eu.exelban.Stats"]
+        let axPressIsUselessApps = ["com.xk72.Charles"]  // AXPress 假成功的应用
+        let needsPhysicalClick = needsPhysicalClickApps.contains(currentIcon.bundleId)
+        let skipAXPress = axPressIsUselessApps.contains(currentIcon.bundleId)
+        
+        if needsPhysicalClick {
+            print("   ⚠️ App requires physical mouse events, prioritizing AXShowMenu then Physical Click")
         }
-
-        // 策略 2：递归查找支持 AXShowMenu 的子元素
-        if let menuElement = findShowMenuChild(currentIcon.element) {
-            if AXUIElementPerformAction(menuElement, "AXShowMenu" as CFString) == .success {
-                return
-            }
-        }
-
-        // 策略 3：直接对容器尝试 AXShowMenu
+        
+        // === 策略 1：先尝试 AXShowMenu（对所有应用都适用，且更语义化）===
+        print("   🔄 Strategy 1: Attempting AXShowMenu on element")
         if AXUIElementPerformAction(currentIcon.element, "AXShowMenu" as CFString) == .success {
+            print("   🚀 Success via Strategy 1 (AXShowMenu)")
             return
         }
-
-        // 策略 4：聚焦后 AXPress
-        if AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success {
-            if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
+        
+        // === 策略 2：递归查找支持 AXShowMenu 的子元素 ===
+        if let menuElement = findShowMenuChild(currentIcon.element) {
+            print("   ✅ Strategy 2: Found ShowMenu child")
+            if AXUIElementPerformAction(menuElement, "AXShowMenu" as CFString) == .success {
+                print("   🚀 Success via Strategy 2 (Child AXShowMenu)")
                 return
             }
         }
+        
+        // === 对于需要物理点击的应用，直接跳到物理点击 ===
+        if needsPhysicalClick {
+            print("   💣 Strategy 3 (Fast Path): Physical Click for stubborn app")
+            simulatePhysicalClick(on: currentIcon)
+            return
+        }
+        
+        // === 策略 3：AXPress（仅对标准应用）===
+        // 跳过那些 AXPress "假成功"的应用（如 Charles）
+        if !skipAXPress {
+            var actionsRef2: CFArray?
+            if AXUIElementCopyActionNames(currentIcon.element, &actionsRef2) == .success,
+               let actions = actionsRef2 as? [String],
+               actions.contains(kAXPressAction) {
+                print("   ✅ Strategy 3: Element itself supports AXPress")
+                if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
+                    print("   🚀 Success via Strategy 3 (AXPress)")
+                    return
+                }
+            }
+        } else {
+            print("   ⏭️ Skipping AXPress (known to be useless for this app)")
+        }
+        
+        // === 策略 4：递归查找支持 AXPress 的子元素 ===
+        if !skipAXPress {
+            if let button = findClickableChild(currentIcon.element) {
+                print("   ✅ Strategy 4: Found clickable child, attempting AXPress")
+                if AXUIElementPerformAction(button, kAXPressAction as CFString) == .success {
+                    print("   🚀 Success via Strategy 4 (Child AXPress)")
+                    return
+                }
+            }
+        }
 
-        // 策略 5：JXA 终极方案（使用 AppleScript，不依赖鼠标）
-        // 注意：JXA 对同一 App 多图标有局限性，尽量在前 4 步解决
+        // === 策略 5：聚焦后 AXPress ===
+        if !skipAXPress {
+            print("   🔄 Strategy 5: Attempting Focus + AXPress")
+            if AXUIElementSetAttributeValue(currentIcon.element, kAXFocusedAttribute as CFString, true as CFTypeRef) == .success {
+                if AXUIElementPerformAction(currentIcon.element, kAXPressAction as CFString) == .success {
+                    print("   🚀 Success via Strategy 5 (Focus + AXPress)")
+                    return
+                }
+            }
+        }
+
+        // === 策略 6：JXA 方案（使用 AppleScript）===
+        print("   ☢️ Strategy 6: Fallback to JXA")
         clickViaJXA(appName: currentIcon.name, bundleId: currentIcon.bundleId)
+        
+        // === 策略 7：物理点击（绝对兜底）===
+        print("   💣 Strategy 7: Physical Click (Last Resort)")
+        simulatePhysicalClick(on: currentIcon)
     }
 
     /// 使用 JXA (JavaScript for Automation) 点击菜单栏图标
@@ -569,7 +785,7 @@ class SwitcherPanel: NSPanel {
         let panelWidth = max(totalWidth, 200)
         let panelHeight: CGFloat = 100
 
-        // 多屏幕支持：面板跟随鼠标位置
+        // 多屏幕支持：面板显示在鼠标所在的屏幕上（用户正在看的屏幕）
         let mouseLoc = NSEvent.mouseLocation
         let targetScreen = NSScreen.screens.first(where: { NSMouseInRect(mouseLoc, $0.frame, false) }) ?? NSScreen.main
         if let screen = targetScreen {
@@ -670,10 +886,9 @@ class SwitcherPanel: NSPanel {
         // 更新名称，显示是否被遮挡（使用统一的判断方法）
         let icon = icons[selectedIndex]
         let isHidden = StatusBarManager.shared.isIconHidden(icon)
-
         nameLabel.stringValue = isHidden ? "\(icon.name) (隐藏)" : icon.name
     }
-
+    
     func selectNext() {
         selectedIndex = (selectedIndex + 1) % icons.count
     }
@@ -1144,4 +1359,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 let app = NSApplication.shared
 let delegate = AppDelegate()
 app.delegate = delegate
+
+// 监听 SIGINT (Ctrl+C) 以便在终端调试时优雅退出
+signal(SIGINT) { _ in
+    print("\nReceived SIGINT. Exiting...")
+    NSApplication.shared.terminate(nil)
+}
+
 app.run()
