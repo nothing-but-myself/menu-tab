@@ -20,11 +20,14 @@ class HUDPanel: NSPanel {
 
     private func setupVisualEffect() {
         visualEffectView = NSVisualEffectView(frame: .zero)
-        visualEffectView.material = .hudWindow
+        visualEffectView.material = .popover
         visualEffectView.state = .active
         visualEffectView.wantsLayer = true
         visualEffectView.layer?.cornerRadius = Design.Switcher.cornerRadius
         visualEffectView.layer?.masksToBounds = true
+        // Subtle border for better visibility in both light/dark modes
+        visualEffectView.layer?.borderWidth = 0.5
+        visualEffectView.layer?.borderColor = NSColor.separatorColor.cgColor
 
         contentView = visualEffectView
     }
@@ -34,9 +37,15 @@ class HUDPanel: NSPanel {
         // Subclasses override this
     }
 
+    /// Update border color when appearance changes
+    func updateAppearance() {
+        visualEffectView.layer?.borderColor = NSColor.separatorColor.cgColor
+    }
+
     // MARK: - Animations
 
     func showAnimated() {
+        updateAppearance()
         self.alphaValue = 0
         self.orderFront(nil)
         NSAnimationContext.runAnimationGroup { context in

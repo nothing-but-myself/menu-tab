@@ -35,11 +35,14 @@ class SwitcherPanel: NSPanel {
 
     private func setupUI() {
         visualEffectView = NSVisualEffectView(frame: .zero)
-        visualEffectView.material = .hudWindow
+        visualEffectView.material = .popover
         visualEffectView.state = .active
         visualEffectView.wantsLayer = true
-        visualEffectView.layer?.cornerRadius = 12
+        visualEffectView.layer?.cornerRadius = Design.Switcher.cornerRadius
         visualEffectView.layer?.masksToBounds = true
+        // Subtle border for better visibility in both light/dark modes
+        visualEffectView.layer?.borderWidth = 0.5
+        visualEffectView.layer?.borderColor = NSColor.separatorColor.cgColor
 
         contentView = visualEffectView
 
@@ -48,16 +51,18 @@ class SwitcherPanel: NSPanel {
 
         selectionBox = NSBox(frame: .zero)
         selectionBox.boxType = .custom
-        selectionBox.borderWidth = 0
-        selectionBox.cornerRadius = 10
-        selectionBox.fillColor = NSColor.labelColor.withAlphaComponent(0.12)
+        selectionBox.borderWidth = 2
+        selectionBox.borderColor = NSColor.controlAccentColor
+        selectionBox.cornerRadius = Design.Switcher.selectionCornerRadius
+        selectionBox.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.15)
         selectionBox.wantsLayer = true
         containerView.addSubview(selectionBox)
 
         nameLabel = NSTextField(labelWithString: "")
-        nameLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
+        nameLabel.font = NSFont.systemFont(ofSize: Design.Switcher.nameLabelFontSize, weight: .medium)
         nameLabel.textColor = .labelColor
         nameLabel.alignment = .center
+        nameLabel.lineBreakMode = .byTruncatingTail
         visualEffectView.addSubview(nameLabel)
     }
 
@@ -73,21 +78,24 @@ class SwitcherPanel: NSPanel {
         iconViews.removeAll()
         hiddenIndicators.removeAll()
 
-        let iconSize: CGFloat = 48
-        let padding: CGFloat = 16
-        let spacing: CGFloat = 12
+        let iconSize = Design.Switcher.iconSize
+        let padding = Design.Switcher.padding
+        let spacing = Design.Switcher.iconSpacing
 
         let totalWidth = CGFloat(icons.count) * iconSize + CGFloat(icons.count - 1) * spacing + padding * 2
-        let panelWidth = max(totalWidth, 200)
-        let panelHeight: CGFloat = 100
+        let panelWidth = max(totalWidth, Design.Switcher.minWidth)
+        let panelHeight = Design.Switcher.height
 
         // Position on the specified screen
         let x = screen.frame.origin.x + (screen.frame.width - panelWidth) / 2
-        let y = screen.frame.origin.y + (screen.frame.height - panelHeight) / 2 + 120
+        let y = screen.frame.origin.y + (screen.frame.height - panelHeight) / 2 + Design.Switcher.verticalOffset
         setFrame(NSRect(x: x, y: y, width: panelWidth, height: panelHeight), display: true)
 
         contentView?.frame = NSRect(x: 0, y: 0, width: panelWidth, height: panelHeight)
         containerView.frame = NSRect(x: padding, y: 30, width: panelWidth - padding * 2, height: iconSize)
+
+        // Update border color for current appearance
+        visualEffectView.layer?.borderColor = NSColor.separatorColor.cgColor
 
         // Create icon views
         for (index, icon) in icons.enumerated() {
@@ -107,15 +115,18 @@ class SwitcherPanel: NSPanel {
 
             iconContainer.addSubview(imageView)
 
-            // Hidden indicator (all icons in switcher are hidden, but keep the visual)
+            // Hidden indicator overlay
             let overlay = NSView(frame: NSRect(x: 0, y: 0, width: iconSize, height: iconSize))
             overlay.wantsLayer = true
-            overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(0.3).cgColor
-            overlay.layer?.cornerRadius = 6
+            overlay.layer?.backgroundColor = NSColor.black.withAlphaComponent(Design.HiddenIndicator.overlayAlpha).cgColor
+            overlay.layer?.cornerRadius = Design.HiddenIndicator.cornerRadius
             iconContainer.addSubview(overlay)
             hiddenIndicators.append(overlay)
 
-            let eyeIcon = NSImageView(frame: NSRect(x: iconSize - 16, y: 2, width: 14, height: 14))
+            // Eye slash icon
+            let eyeSize = Design.HiddenIndicator.eyeIconSize
+            let eyeMargin = Design.HiddenIndicator.eyeIconMargin
+            let eyeIcon = NSImageView(frame: NSRect(x: iconSize - eyeSize - eyeMargin, y: eyeMargin, width: eyeSize, height: eyeSize))
             eyeIcon.image = NSImage(systemSymbolName: "eye.slash.fill", accessibilityDescription: "Hidden")
             eyeIcon.contentTintColor = .white
             iconContainer.addSubview(eyeIcon)
@@ -134,7 +145,7 @@ class SwitcherPanel: NSPanel {
             iconViews.append(imageView)
         }
 
-        nameLabel.frame = NSRect(x: 0, y: 8, width: panelWidth, height: 18)
+        nameLabel.frame = NSRect(x: padding, y: Design.Switcher.nameLabelBottomMargin, width: panelWidth - padding * 2, height: Design.Switcher.nameLabelHeight)
 
         isConfiguring = true
         selectedIndex = 0
@@ -145,9 +156,9 @@ class SwitcherPanel: NSPanel {
     private func updateSelection(animated: Bool) {
         guard selectedIndex >= 0 && selectedIndex < iconViews.count else { return }
 
-        let iconSize: CGFloat = 48
-        let spacing: CGFloat = 12
-        let boxPadding: CGFloat = 4
+        let iconSize = Design.Switcher.iconSize
+        let spacing = Design.Switcher.iconSpacing
+        let boxPadding = Design.Switcher.selectionPadding
 
         let targetX = CGFloat(selectedIndex) * (iconSize + spacing) - boxPadding
         let targetFrame = NSRect(
@@ -159,7 +170,7 @@ class SwitcherPanel: NSPanel {
 
         if animated {
             NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.15
+                context.duration = Design.Animation.selectionMove
                 context.timingFunction = CAMediaTimingFunction(name: .easeInEaseOut)
                 selectionBox.animator().frame = targetFrame
             }
@@ -180,10 +191,15 @@ class SwitcherPanel: NSPanel {
     }
 
     func showAnimated() {
+        // Update colors for current appearance
+        visualEffectView.layer?.borderColor = NSColor.separatorColor.cgColor
+        selectionBox.borderColor = NSColor.controlAccentColor
+        selectionBox.fillColor = NSColor.controlAccentColor.withAlphaComponent(0.15)
+
         self.alphaValue = 0
         self.orderFront(nil)
         NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.15
+            context.duration = Design.Animation.panelFadeIn
             context.timingFunction = CAMediaTimingFunction(name: .easeOut)
             self.animator().alphaValue = 1
         }
@@ -191,7 +207,7 @@ class SwitcherPanel: NSPanel {
 
     func hideAnimated(completion: (() -> Void)? = nil) {
         NSAnimationContext.runAnimationGroup({ context in
-            context.duration = 0.1
+            context.duration = Design.Animation.panelFadeOut
             context.timingFunction = CAMediaTimingFunction(name: .easeIn)
             self.animator().alphaValue = 0
         }, completionHandler: {
