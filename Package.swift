@@ -2,14 +2,14 @@
 import PackageDescription
 
 let package = Package(
-    name: "MenuTab",
+    name: "WhatsHidden",
     platforms: [
         .macOS(.v12)
     ],
     targets: [
         .executableTarget(
-            name: "MenuTab",
-            path: "MenuTab"
+            name: "WhatsHidden",
+            path: "Sources/WhatsHidden"
         )
     ]
 )
